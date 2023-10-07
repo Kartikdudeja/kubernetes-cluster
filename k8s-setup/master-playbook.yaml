@@ -1,0 +1,155 @@
+---
+
+- name: "Setup and Configure Kubernetes Master Node"
+
+  hosts: master
+  become: true
+  gather_facts: true
+
+  vars:
+    POD_NETWORK_CIDR: "10.10.0.0/16"
+    K8S_MASTER_NODE_NAME: "k8s-master"
+    K8S_MASTER_NODE_IP: "10.10.10.100"
+
+  tasks:
+
+  - name: "Intall Prerequisite Packages"
+    apt:
+      name: "{{ PACKAGES }}"
+      state: present
+      update_cache: yes
+
+    vars:
+      PACKAGES:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - gnupg-agent
+        - software-properties-common
+
+  - name: "Add GPG Key for Docker Installation"
+    apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+
+  - name: "Add docker repository"
+    apt_repository: 
+      repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_lsb.codename }} stable"
+      state: present
+      update_cache: yes  
+
+  - name: "Install Docker and its Dependencies"
+    apt:
+      name: "{{ PACKAGES }}"
+      state: present
+      update_cache: yes
+    
+    vars:
+      PACKAGES:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+    
+    notify:
+      - docker status
+
+  - name: "Start and Enable docker service"
+    service:
+      name: docker
+      state: started
+      enabled: true
+
+  - name: "Add 'vagrant' user to 'docker' group"
+    user:
+      name: vagrant
+      group: docker
+
+  - name: "Remove swapfile from '/etc/fstab'"
+    mount:
+      name: "{{ item }}"
+      fstype: swap
+      state: absent
+
+    with_items:
+      - swap
+      - none
+
+  - name: "Disable Swap"
+    command: swapoff -a
+    when: ansible_swaptotal_mb > 0
+
+  - name: "Add an apt signing key for Kubernetes"
+    apt_key: 
+      url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+      state: present
+
+  - name: "Adding apt repository for Kubernetes"
+    apt_repository:
+      repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+      state: present
+      filename: kubernetes.list
+
+  - name: "Install kubernetes binaries"
+    apt:
+      name: "{{ PACKAGES }}"
+      state: present
+      update_cache: yes
+
+    vars:
+      PACKAGES:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+  - name: "Configure Node IP"
+    lineinfile:
+      path: /etc/default/kubelet
+      line: KUBELET_EXTRA_ARGS=--node-ip={{ ansible_eth1.ipv4.address }}
+      create: yes
+
+  - name: "Fix for Container Runtime Issue Error"
+    replace:
+      path: /etc/containerd/config.toml
+      regexp: '^disabled_plugins = \["cri"\]'
+      replace: '#disabled_plugins = \["cri"\]'
+
+  - name: "Restart containerd.service"
+    service:
+      name: containerd
+      daemon_reload: yes
+      state: restarted
+
+  - name: "Restart kubelet"
+    service:
+      name: kubelet
+      daemon_reload: yes
+      state: restarted
+
+  - name: "Initialize the kubernetes cluster using kudeadm"
+    command: kubeadm init --apiserver-advertise-address="{{ K8S_MASTER_NODE_IP }}" --apiserver-cert-extra-sans="{{ K8S_MASTER_NODE_IP }}"  --node-name {{ K8S_MASTER_NODE_NAME }} --pod-network-cidr={{ POD_NETWORK_CIDR }}
+
+  - name: "Setup kubeconfig for 'vagrant' user"
+    command: "{{ item }}"
+    with_items:
+      - mkdir -p /home/vagrant/.kube
+      - cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+      - chown vagrant:vagrant /home/vagrant/.kube/config
+
+  # Setup the container networking provider and the network policy engine 
+  - name: "Install calico pod network"
+    become: yes
+    become_user: vagrant
+    command: kubectl --kubeconfig /home/vagrant/.kube/config apply -f https://docs.projectcalico.org/manifests/calico.yaml
+
+  - name: "Generate join command for nodes to join the k8s cluster"
+    command: kubeadm token create --print-join-command
+    register: join_command
+
+  - name: "copy join command to local file"
+    local_action: copy content="{{ join_command.stdout_lines[0] }}" dest="./join-command"
+
+  handlers:
+    - name: "docker status"
+      service:
+        name: docker
+        state: started

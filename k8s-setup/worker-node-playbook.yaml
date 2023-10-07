@@ -1,0 +1,144 @@
+---
+
+- name: "Setup and Configure Kubernetes Worker Node"
+
+  hosts: worker
+  become: true
+  gather_facts: true
+
+  tasks:
+
+  - name: "Intall Prerequisite Packages"
+    apt:
+      name: "{{ PACKAGES }}"
+      state: present
+      update_cache: yes
+
+    vars:
+      PACKAGES:
+        - apt-transport-https
+        - ca-certificates
+        - curl
+        - gnupg-agent
+        - software-properties-common
+
+  - name: "Add GPG Key for Docker Installation"
+    apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+
+  - name: "Add docker repository"
+    apt_repository: 
+      repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_lsb.codename }} stable"
+      state: present
+      update_cache: yes
+
+  - name: "Install Docker and its Dependencies"
+    apt:
+      name: "{{ PACKAGES }}"
+      state: present
+      update_cache: yes
+    
+    vars:
+      PACKAGES:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+    
+    notify:
+      - docker status
+
+  - name: "Start and Enable docker service"
+    service:
+      name: docker
+      state: started
+      enabled: true
+
+  - name: "Add 'vagrant' user to 'docker' group"
+    user:
+      name: vagrant
+      group: docker
+
+  - name: "Remove swapfile from '/etc/fstab'"
+    mount:
+      name: "{{ item }}"
+      fstype: swap
+      state: absent
+
+    with_items:
+      - swap
+      - none
+
+  - name: "Disable Swap"
+    command: swapoff -a
+    when: ansible_swaptotal_mb > 0
+
+  - name: "Add an apt signing key for Kubernetes"
+    apt_key: 
+      url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+      state: present
+
+  - name: "Adding apt repository for Kubernetes"
+    apt_repository:
+      repo: deb https://apt.kubernetes.io/ kubernetes-xenial main
+      state: present
+      filename: kubernetes.list
+
+  - name: "Install kubernetes binaries"
+    apt:
+      name: "{{ PACKAGES }}"
+      state: present
+      update_cache: yes
+
+    vars:
+      PACKAGES:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+  - name: "Configure Node IP"
+    lineinfile:
+      path: /etc/default/kubelet
+      line: KUBELET_EXTRA_ARGS=--node-ip={{ ansible_eth1.ipv4.address }}
+      create: yes
+
+  - name: "Fix for Container Runtime Issue Error"
+    replace:
+      path: /etc/containerd/config.toml
+      regexp: '^disabled_plugins = \["cri"\]'
+      replace: '#disabled_plugins = \["cri"\]'
+
+  - name: "Restart containerd.service"
+    service:
+      name: containerd
+      daemon_reload: yes
+      state: restarted
+
+  - name: "Restart kubelet"
+    service:
+      name: kubelet
+      daemon_reload: yes
+      state: restarted
+
+  - name: "Copy the join command to server location"
+    copy:
+      src: join-command
+      dest: /tmp/k8s-cluster-join-command.sh
+      mode: 0755
+
+  - name: "Join the Node to the k8s cluster"
+    command: sh /tmp/k8s-cluster-join-command.sh
+
+    notify:
+      - Restart kubelet service
+
+  handlers:
+    - name: "docker status"
+      service:
+        name: docker
+        state: started
+
+    - name: "Restart kubelet service"
+      service:
+        name: kubelet
+        state: restarted
