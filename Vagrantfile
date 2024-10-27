@@ -35,6 +35,7 @@ Vagrant.configure("2") do |config|
             node.vm.box = IMAGE_NAME
             node.vm.network "private_network", ip: "10.10.10.#{i + 100}"
             node.vm.hostname = "k8s-node-#{i}"
+            node.vm.provision "shell", inline: "sudo timedatectl set-timezone Asia/Kolkata"
 
             node.vm.provider "virtualbox" do |vb|
                 vb.name = "k8s-node-#{i}"
@@ -59,6 +60,8 @@ Vagrant.configure("2") do |config|
 
         # Provisioning Kubernetes Cluster:
         master.vm.provision "shell", inline: <<-SHELL
+
+            sudo timedatectl set-timezone Asia/Kolkata
             
             echo -e "$(date '+%F %T') INFO: Installing Ansible on master node"
 
