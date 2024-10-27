@@ -1,0 +1,29 @@
+- name: "Setup and Configure Kubernetes Worker Node"
+
+  hosts: worker
+  become: true
+  become_method: sudo
+  gather_facts: true
+
+  tasks:
+
+  - name: "Copy the join command to server location"
+    copy:
+      src: join-command
+      dest: /tmp/k8s-cluster-join-command.sh
+      mode: 0755
+
+  - name: "Add cri-socket arg to kubeadm join command"
+    command: sed -i 's|$| --cri-socket /var/run/containerd/containerd.sock|' /tmp/k8s-cluster-join-command.sh
+
+  - name: "Join the Node to the k8s cluster"
+    command: sh /tmp/k8s-cluster-join-command.sh
+
+    notify:
+      - Restart kubelet service
+
+  handlers:
+    - name: "Restart kubelet service"
+      service:
+        name: kubelet
+        state: restarted

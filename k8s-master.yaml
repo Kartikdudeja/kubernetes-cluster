@@ -1,0 +1,40 @@
+- name: "Setup and Configure Kubernetes Master Node"
+
+  hosts: master
+  become: true
+  become_method: sudo  
+  gather_facts: true
+
+  vars:
+    POD_NETWORK_CIDR: "10.10.0.0/16"
+    K8S_MASTER_NODE_NAME: "k8s-master"
+    K8S_MASTER_NODE_IP: "10.10.10.100"
+
+  tasks:
+
+  - name: "Initialize kubernetes cluster using kubeadm"
+    command: kubeadm init --cri-socket /var/run/containerd/containerd.sock --apiserver-advertise-address="{{ K8S_MASTER_NODE_IP }}" --apiserver-cert-extra-sans="{{ K8S_MASTER_NODE_IP }}"  --node-name {{ K8S_MASTER_NODE_NAME }} --pod-network-cidr={{ POD_NETWORK_CIDR }}
+
+  - name: "Setup kubeconfig for 'vagrant' user"
+    command: "{{ item }}"
+    with_items:
+      - mkdir -p /home/vagrant/.kube
+      - cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+      - chown vagrant:vagrant /home/vagrant/.kube/config    
+
+  # Setup the container networking provider and the network policy engine 
+  - name: "Install calico pod network"
+    become: false
+    command: kubectl --kubeconfig /home/vagrant/.kube/config apply -f https://docs.projectcalico.org/manifests/calico.yaml
+
+  - name: "Remove Taint from Master Node"
+    become: false
+    shell:
+      cmd: kubectl --kubeconfig /home/vagrant/.kube/config taint nodes {{ K8S_MASTER_NODE_NAME }} node-role.kubernetes.io/control-plane:NoSchedule-
+
+  - name: "Generate join command for nodes to join the k8s cluster"
+    command: kubeadm token create --print-join-command
+    register: join_command
+
+  - name: "copy join command to local file"
+    local_action: copy content="{{ join_command.stdout_lines[0] }}" dest="./join-command"
