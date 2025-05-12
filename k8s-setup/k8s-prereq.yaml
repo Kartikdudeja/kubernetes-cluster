@@ -140,3 +140,9 @@
       state: restarted
       daemon_reload: yes
       enabled: yes
+
+  - name: "Add vagrant user to docker group"
+    user:
+      name: vagrant
+      groups: docker
+      append: yes
